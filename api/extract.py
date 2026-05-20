@@ -6,37 +6,131 @@ import time
 
 app = Flask(__name__)
 
+
+# =========================================================
+# Utility Functions
+# =========================================================
+
+def validate_url(url):
+    parsed = urlparse(url)
+    return parsed.scheme and parsed.netloc
+
+
+
+def detect_framework(html_text, js_files):
+
+    framework = "Unknown"
+
+    html_lower = html_text.lower()
+
+    # HTML detection
+    if "vite" in html_lower:
+        framework = "Vite"
+
+    elif "__next" in html_lower:
+        framework = "Next.js"
+
+    elif "webpack" in html_lower:
+        framework = "Webpack"
+
+    elif "react" in html_lower:
+        framework = "React"
+
+    elif "vue" in html_lower:
+        framework = "Vue"
+
+    # JS filename detection
+    for js in js_files:
+
+        lower = js.lower()
+
+        if "vite" in lower:
+            framework = "Vite"
+            break
+
+        elif "webpack" in lower:
+            framework = "Webpack"
+            break
+
+        elif "next" in lower:
+            framework = "Next.js"
+            break
+
+        elif "react" in lower:
+            framework = "React"
+            break
+
+        elif "vue" in lower:
+            framework = "Vue"
+            break
+
+    return framework
+
+
+
+def clean_sort(items):
+    return sorted(list(set(items)))
+
+
+# =========================================================
+# Routes
+# =========================================================
+
 @app.route("/")
 def home():
+
     return jsonify({
         "success": True,
-        "message": "FF Web Event Asset Extractor API Running"
+        "name": "FF Web Event Asset Extractor API",
+        "status": "running",
+        "version": "1.0.0",
+        "developer": "Chirantan"
     })
 
 
 @app.route("/extract")
-def extract():
+def extract_assets():
 
     target = request.args.get("url")
 
+    # =====================================================
     # Validate URL
+    # =====================================================
+
     if not target:
+
         return jsonify({
             "success": False,
-            "message": "Missing URL parameter"
+            "error": {
+                "code": 400,
+                "message": "Missing URL parameter"
+            }
         }), 400
 
-    parsed = urlparse(target)
 
-    if not parsed.scheme or not parsed.netloc:
+    if not validate_url(target):
+
         return jsonify({
             "success": False,
-            "message": "Invalid URL"
+            "error": {
+                "code": 400,
+                "message": "Invalid URL"
+            }
         }), 400
+
+
+    # =====================================================
+    # Start Timer
+    # =====================================================
 
     start_time = time.time()
 
+
     try:
+
+        # =================================================
+        # Browser Headers
+        # =================================================
 
         headers = {
             "User-Agent": (
@@ -46,8 +140,15 @@ def extract():
             ),
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
             "Referer": target
         }
+
+
+        # =================================================
+        # Request Website
+        # =================================================
 
         response = requests.get(
             target,
@@ -56,57 +157,60 @@ def extract():
             allow_redirects=True
         )
 
+
         status_code = response.status_code
 
-        # Block bad responses
+
+        # =================================================
+        # Handle HTTP Errors
+        # =================================================
+
         if status_code >= 400:
+
             return jsonify({
                 "success": False,
-                "status": status_code,
-                "message": f"Website returned HTTP {status_code}"
+                "error": {
+                    "code": status_code,
+                    "message": f"Website returned HTTP {status_code}"
+                }
             }), status_code
+
+
+        # =================================================
+        # Parse HTML
+        # =================================================
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        js_files = []
-        css_files = []
+
+        # =================================================
+        # Asset Containers
+        # =================================================
+
+        javascript_files = []
+        stylesheet_files = []
         preload_files = []
         icon_files = []
 
-        framework = "Unknown"
 
-        # -------------------------
-        # Extract JS
-        # -------------------------
+        # =================================================
+        # Extract JavaScript
+        # =================================================
+
         for script in soup.find_all("script"):
 
             src = script.get("src")
 
             if src:
 
-                full = urljoin(target, src)
+                full_url = urljoin(target, src)
+                javascript_files.append(full_url)
 
-                if full not in js_files:
-                    js_files.append(full)
 
-                # Framework detection
-                lower = full.lower()
+        # =================================================
+        # Extract LINK Assets
+        # =================================================
 
-                if "vite" in lower:
-                    framework = "Vite"
-
-                elif "webpack" in lower:
-                    framework = "Webpack"
-
-                elif "next" in lower:
-                    framework = "Next.js"
-
-                elif "react" in lower:
-                    framework = "React"
-
-        # -------------------------
-        # Extract LINK assets
-        # -------------------------
         for link in soup.find_all("link"):
 
             href = link.get("href")
@@ -114,100 +218,153 @@ def extract():
             if not href:
                 continue
 
-            full = urljoin(target, href)
+            full_url = urljoin(target, href)
 
             rel = link.get("rel")
             rel_text = " ".join(rel).lower() if rel else ""
 
-            # CSS
+
+            # Stylesheets
             if "stylesheet" in rel_text:
+                stylesheet_files.append(full_url)
 
-                if full not in css_files:
-                    css_files.append(full)
 
-            # Preload
+            # Preloads
             if "preload" in rel_text or "modulepreload" in rel_text:
+                preload_files.append(full_url)
 
-                if full not in preload_files:
-                    preload_files.append(full)
 
             # Icons
             if "icon" in rel_text:
+                icon_files.append(full_url)
 
-                if full not in icon_files:
-                    icon_files.append(full)
 
-        # -------------------------
-        # Sorting
-        # -------------------------
-        js_files.sort()
-        css_files.sort()
-        preload_files.sort()
-        icon_files.sort()
+        # =================================================
+        # Clean & Sort
+        # =================================================
 
-        total_assets = (
-            len(js_files)
-            + len(css_files)
-            + len(preload_files)
-            + len(icon_files)
+        javascript_files = clean_sort(javascript_files)
+        stylesheet_files = clean_sort(stylesheet_files)
+        preload_files = clean_sort(preload_files)
+        icon_files = clean_sort(icon_files)
+
+
+        # =================================================
+        # Framework Detection
+        # =================================================
+
+        framework = detect_framework(
+            response.text,
+            javascript_files
         )
 
-        end_time = time.time()
 
+        # =================================================
+        # Asset Counts
+        # =================================================
+
+        javascript_count = len(javascript_files)
+        stylesheet_count = len(stylesheet_files)
+        preload_count = len(preload_files)
+        icon_count = len(icon_files)
+
+        total_assets = (
+            javascript_count
+            + stylesheet_count
+            + preload_count
+            + icon_count
+        )
+
+
+        # =================================================
+        # Response Time
+        # =================================================
+
+        end_time = time.time()
         response_time = round(end_time - start_time, 2)
 
-        # -------------------------
-        # Final Response
-        # -------------------------
+
+        # =================================================
+        # Final JSON Response
+        # =================================================
+
         return jsonify({
 
             "success": True,
 
             "meta": {
-                "site": parsed.netloc,
-                "status": status_code,
+                "site": urlparse(target).netloc,
                 "framework": framework,
+                "status": status_code,
                 "response_time": f"{response_time}s",
                 "total_assets": total_assets
             },
 
             "counts": {
-                "javascript": len(js_files),
-                "stylesheets": len(css_files),
-                "icons": len(icon_files),
-                "preloads": len(preload_files)
+                "javascript": javascript_count,
+                "stylesheets": stylesheet_count,
+                "preloads": preload_count,
+                "icons": icon_count
             },
 
             "assets": {
-                "javascript": js_files,
-                "stylesheets": css_files,
-                "icons": icon_files,
-                "preloads": preload_files
+                "javascript": javascript_files,
+                "stylesheets": stylesheet_files,
+                "preloads": preload_files,
+                "icons": icon_files
             }
 
         })
+
+
+    # =====================================================
+    # Timeout Error
+    # =====================================================
 
     except requests.exceptions.Timeout:
 
         return jsonify({
             "success": False,
-            "message": "Request timed out"
+            "error": {
+                "code": 408,
+                "message": "Request timed out"
+            }
         }), 408
+
+
+    # =====================================================
+    # Connection Error
+    # =====================================================
 
     except requests.exceptions.ConnectionError:
 
         return jsonify({
             "success": False,
-            "message": "Connection failed"
+            "error": {
+                "code": 503,
+                "message": "Connection failed"
+            }
         }), 503
+
+
+    # =====================================================
+    # Unknown Error
+    # =====================================================
 
     except Exception as e:
 
         return jsonify({
             "success": False,
-            "message": str(e)
+            "error": {
+                "code": 500,
+                "message": str(e)
+            }
         }), 500
 
+
+# =========================================================
+# Run App
+# =========================================================
 
 if __name__ == "__main__":
     app.run(debug=True)
